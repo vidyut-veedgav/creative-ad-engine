@@ -1,0 +1,12 @@
+# Giant Creative Ad Engine — runtime dependencies
+#
+# Layer 1 (signal) and the deterministic pipeline (diagnosis, hypothesis) need only
+# pandas/numpy. The agent and app layers add their own deps as they are implemented.
+pandas>=2.0
+numpy>=1.24
+
+# Layer 4 (agent) — uncomment when implementing src/agent.py
+# anthropic>=0.40
+
+# Layer 5 (app) — uncomment when implementing app/
+# streamlit>=1.30
