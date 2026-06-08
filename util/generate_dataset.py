@@ -33,8 +33,14 @@ on top, so that aggregations produce directionally meaningful signal:
                failing, not merely the theme. The analytics layer is
                meant to detect this divergence.
 
-  CONFIDENCE -> The flat one. Mid-tier metrics with natural variance and
-               no real trend in either direction. The "stable" baseline.
+  CONFIDENCE -> The clean riser. Mid-tier metrics that improve UNIFORMLY and
+               steadily across all six ads, with NO spend ramp and therefore NO
+               efficiency ceiling (the deliberate contrast to wonder, which rises
+               INTO a saturation ceiling). CTR and CVR compound ~0.5%/day so CPI
+               keeps falling right through day 90 -- still-rising momentum in the
+               recent window. This is the AMPLIFICATION narrative: the signal is
+               uniform + rising with no ceiling, so the recommended action is to
+               scale spend / expand placements rather than refresh creative.
 
   CONNECTION -> The noisy one. High week-over-week volatility. A couple of
                strong ads mask several weak ones (large WITHIN-theme
@@ -309,7 +315,16 @@ def build_ads():
                     # a stable per-ad phase so connection ads peak on
                     # different weeks (de-synchronized volatility):
                     "phase": rng.uniform(0, 2 * math.pi),
-                    "base_spend": rng.uniform(45.0, 85.0),
+                    # Per-ad budget. Widened from the original 45-85 band to a
+                    # broader 25-150 so per-ad spend (hence recent_spend) varies
+                    # materially -> the spend term in the hypothesis layer's ICE
+                    # impact can discriminate (a big % move on a small-spend ad
+                    # should not outrank a small move on a large budget). CPI is
+                    # spend-invariant by construction (see header), so this only
+                    # rescales spend/impressions/installs -- it never moves CPI
+                    # for any theme except wonder (whose saturation penalty is the
+                    # one place absolute spend feeds back into CVR).
+                    "base_spend": rng.uniform(25.0, 150.0),
                     # CVR lift for the connection video outliers (1.0 otherwise):
                     "cvr_outlier_mult": cvr_outlier_mult,
                     # week-over-week swing damping (1.0 = full volatility,
@@ -359,8 +374,14 @@ def theme_ctr_mult(theme, d, ad):
         decay = (d - 35) / (DAYS - 1 - 35)
         return 1.20 - 0.50 * decay        # falls from ~1.20 to ~0.70
     if theme == "confidence":
-        # flat, mild slow wobble only (no trend)
-        return 1.00 + 0.03 * math.sin(2 * math.pi * d / 30.0)
+        # uniform, steadily RISING efficiency with NO spend ramp -> the theme
+        # keeps improving right through day 90 and never hits a ceiling (contrast
+        # wonder, which rises INTO a saturation ceiling). Compounding ~0.5%/day
+        # gains on both CTR and CVR give a clean, sustained CPI decline -> the
+        # amplification narrative (scale spend, no ceiling yet). A small wobble
+        # keeps it realistic without breaking the monotonic trend.
+        wobble = 1.0 + 0.02 * math.sin(2 * math.pi * d / 30.0)
+        return (1.005 ** d) * wobble
     if theme == "connection":
         # slight positive drift + strong week-over-week oscillation,
         # phase-shifted per ad so peaks don't line up. ad["volatility"] damps
@@ -381,7 +402,11 @@ def theme_cvr_mult(theme, d, ad):
         decay = (d - 35) / (DAYS - 1 - 35)
         return 1.06 - 0.34 * decay        # funnel weakens -> CPI rises
     if theme == "confidence":
-        return 1.00 + 0.02 * math.sin(2 * math.pi * d / 45.0)
+        # same compounding rise as CTR (no rollover) -> CTR*CVR climbs steadily,
+        # so CPI keeps falling through the whole window. No spend saturation here
+        # (that is wonder-only), so nothing pulls the improvement back.
+        wobble = 1.0 + 0.015 * math.sin(2 * math.pi * d / 45.0)
+        return (1.005 ** d) * wobble
     if theme == "connection":
         weekly = 0.12 * ad["volatility"] * math.sin(2 * math.pi * d / 7.0 + ad["phase"] + 1.0)
         return 1.00 + 0.08 * p + weekly
@@ -449,7 +474,9 @@ def hold_rate_mult(theme, d):
     if theme == "wonder":
         return 1.00 + 0.15 * (d / (DAYS - 1))
     if theme == "confidence":
-        return 1.00
+        # rising theme -> hold_rate drifts gently up over the window (consistent
+        # with the improving CTR/CVR efficiency; never declines).
+        return 1.00 + 0.18 * (d / (DAYS - 1))
     if theme == "connection":
         return 1.00 + 0.10 * math.sin(2 * math.pi * d / 7.0)
     return 1.0
@@ -469,7 +496,8 @@ def plays25_mult(theme, d, ad):
     if theme == "safety":
         return 1.00
     if theme == "confidence":
-        return 1.00 + 0.02 * math.sin(2 * math.pi * d / 30.0)
+        # gently rising hook retention, consistent with the improving theme.
+        return 1.00 + 0.10 * (d / (DAYS - 1)) + 0.02 * math.sin(2 * math.pi * d / 30.0)
     if theme == "connection":
         return 1.00 + 0.18 * ad["volatility"] * math.sin(2 * math.pi * d / 7.0 + ad["phase"])
     return 1.0
@@ -495,7 +523,8 @@ def plays75_ratio_mult(theme, d, ad):
         decay = (d - 35) / (DAYS - 1 - 35)
         return 1.00 - 0.60 * decay
     if theme == "confidence":
-        return 1.00
+        # deep-watch retention rises with the theme (viewers increasingly stay).
+        return 1.00 + 0.15 * (d / (DAYS - 1))
     if theme == "connection":
         return 1.00 + 0.15 * ad["volatility"] * math.sin(2 * math.pi * d / 7.0 + ad["phase"] + 0.5)
     return 1.0

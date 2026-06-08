@@ -8,11 +8,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ad-performance data for *Giant* (an AI storytelling app for children) and surfaces, through a
 conversational UI, which creative themes are rising/declining and what to test next.
 
-**Implementation status: mostly greenfield.** Only `util/generate_dataset.py` is implemented. The
-pipeline modules (`src/signal.py`, `src/diagnosis.py`, `src/hypothesis.py`, `src/agent.py`) and `app/`
-are empty placeholder files awaiting implementation. The authoritative design spec — every layer's
-input/output contract, thresholds, and the agent's required question coverage — lives in
-**`docs/system_architecture.md`**. Read it before implementing any layer.
+**Implementation status.** The dataset generator (`util/generate_dataset.py`), the first three
+**deterministic** pipeline layers, and the agent are implemented and validated: `src/signal.py`
+(Layer 1), `src/diagnosis.py` (Layer 2), and `src/hypothesis.py` (Layer 3) each have a
+`util/verify_*.py` harness asserting their output against the dataset's baked-in narratives;
+`src/agent.py` (Layer 4) is a Gemini conversational assistant with a `util/verify_agent.py` live
+smoke harness (gated on `GEMINI_API_KEY`, skips cleanly without a key). Still to build: the `app/`
+Streamlit UI (Layer 5), currently an empty placeholder.
+The authoritative design spec — every layer's input/output contract, thresholds, and the agent's
+required question coverage — lives in **`docs/system_architecture.md`**. Read it before implementing
+any layer.
 
 > Naming note: the spec uses flat module names (`signal_layer.py`, `diagnosis_layer.py`,
 > `hypothesis_layer.py`, `app.py`). The actual code layout is `src/signal.py`, `src/diagnosis.py`,
@@ -46,7 +51,11 @@ Load-bearing concepts (defined precisely in the spec):
 - **material threshold**: >15% gap vs theme-mean CPI delta to call a format/placement dominant or weak.
 - **hypothesis_type**: amplification / optimization / replication / intervention / retirement, derived
   from direction + uniformity + ceiling (mapping table in the spec).
-- **ICE scoring**: impact (CPI delta × spend) × confidence (strength × uniformity) / ease → backlog rank.
+- **ICE scoring**: impact (CPI-delta magnitude × theme spend) × confidence (strength × uniformity) ×
+  ease → backlog rank. `src/hypothesis.py` takes a 3rd `ad_signals_df` arg (a deliberate divergence from
+  the spec's 2-arg `build_ranked_backlog`) to read per-theme `recent_spend` for the spend term. It also
+  emits a *secondary* `intervention` for execution-level themes (alongside the primary hypothesis), so a
+  volatile theme can both "replicate winners" and "fix laggards".
 - **pattern_summary** is deterministic (built in the diagnosis layer), NOT LLM-generated; it is injected
   verbatim into agent context.
 
@@ -62,11 +71,18 @@ small **by design** so theme slices fit in an LLM context window — no RAG.
   rates, Meta social actions). Column dictionary is in `docs/system_architecture.md`.
 
 **The per-theme narratives are not noise — they are signal the pipeline must detect**, so do not
-casually edit the generator's trend curves:
-- *Wonder*: rising/strong; CPI ~$4.20→$2.80; efficiency ceiling ~day 60.
-- *Safety*: declines from day 35; `video_plays_75pct` + `avg_play_time_sec` drop (mid-video dropout).
-- *Confidence*: stable, flat with variance.
-- *Connection*: volatile; two reels video ads outperform by ~40% CPI (isolated outliers).
+casually edit the generator's trend curves. Each maps to a distinct `hypothesis_type`:
+- *Wonder*: rising/strong; CPI ~$4.20→$2.80; spend-ramp-driven efficiency ceiling ~day 60 → `optimization`.
+- *Safety*: declines from day 35; `video_plays_75pct` + `avg_play_time_sec` drop (mid-video dropout) → `retirement`.
+- *Confidence*: uniform, steadily improving CPI across all 6 ads with **no** spend ramp, so **no** efficiency
+  ceiling (the deliberate contrast to Wonder) → `amplification`.
+- *Connection*: volatile; two reels video ads are isolated outliers running far below theme-median CPI
+  (→ `replication`), while its static/feed laggards invite a secondary `intervention`.
+
+Per-ad `base_spend` is drawn from a wide **$25–150** band (not uniform) so per-ad `recent_spend` varies
+materially — this is what lets the hypothesis layer's ICE *impact* term discriminate by spend-at-stake.
+Note CPI is spend-invariant by construction (`CPI = CPM / (1000·CTR·CVR)`); only Wonder's saturation
+penalty feeds absolute spend back into CPI, so widening spend moves no other theme's CPI.
 
 Regeneration is deterministic via `RANDOM_SEED = 42`.
 
@@ -81,11 +97,27 @@ Python 3.11+. A virtualenv exists at `.venv/`.
 # Regenerate the dataset. The generator writes ads.csv / engagement.csv to the CURRENT directory
 # (relative paths), so run it from inside data/:
 cd data; python ..\util\generate_dataset.py
+
+# Validate each deterministic layer against the dataset's baked-in narratives (run from the repo
+# root; each prints its evidence then asserts, and exits non-zero on any failure). After editing the
+# generator's trend curves, re-run all three and update their expectation sets to match:
+python -m util.verify_signals
+python -m util.verify_diagnosis
+python -m util.verify_hypothesis
 ```
 
-There is **no `requirements.txt`, test suite, linter config, or runnable app yet**. The spec calls for
-`pandas`, `anthropic`, and `streamlit`; declaring dependencies (e.g. a `requirements.txt`) is part of the
-remaining work. When implementing the app, it will run via `streamlit run app/<entrypoint>.py`.
+There is **no formal test suite, linter config, or runnable app yet** — but each deterministic layer has
+a `util/verify_*.py` narrative-assertion harness (above) that serves as its executable check. There is
+also no `requirements.txt`; the spec calls for `pandas`, `anthropic`, and `streamlit`, and declaring
+dependencies is part of the remaining work. When implementing the app, it will run via
+`streamlit run app/<entrypoint>.py`.
 
-When implementing `agent.py`, use a current Claude model id (the spec's `claude-sonnet-4-20250514` is
-dated; prefer the latest Sonnet, e.g. `claude-sonnet-4-6`) and read API keys from the environment.
+**Agent provider — a deliberate divergence from the spec.** `docs/system_architecture.md` and the
+stack note describe an Anthropic/Claude agent, but `src/agent.py` is built on Google's `google-genai`
+SDK with `gemini-2.5-flash` (an explicit project decision). The architecture is unchanged: the LLM is
+strictly downstream of Layers 1–3 and reaches data only through four typed tools (`get_theme_signals`,
+`get_theme_diagnosis`, `get_ranked_backlog`, `get_ad_detail`) built by `build_tools(...)`. The key is
+read from `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) by the SDK's default `genai.Client()`. Public surface:
+`generate_backlog_narrative` and `answer_query` (spec contract) plus a stateful `GiantAgent` class for
+the multi-turn chat UI. If you ever switch the agent back to Claude, also revert this note, the
+`requirements.txt` dependency, and the import in `src/agent.py`.

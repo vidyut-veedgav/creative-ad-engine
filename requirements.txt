@@ -5,8 +5,10 @@
 pandas>=2.0
 numpy>=1.24
 
-# Layer 4 (agent) — uncomment when implementing src/agent.py
-# anthropic>=0.40
+# Layer 4 (agent) — Gemini, per the project's provider choice (the spec/CLAUDE.md
+# note Anthropic; this implementation uses google-genai with gemini-2.5-flash and
+# reads the key from GEMINI_API_KEY / GOOGLE_API_KEY).
+google-genai>=1.0
 
-# Layer 5 (app) — uncomment when implementing app/
-# streamlit>=1.30
+# Layer 5 (app) — Streamlit dashboard + chat UI (run: streamlit run app/app.py)
+streamlit>=1.30

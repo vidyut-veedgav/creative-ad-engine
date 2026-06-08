@@ -108,14 +108,16 @@ def _verify_narratives(theme_signals: dict, ad: pd.DataFrame) -> list[str]:
            s["hold_rate_7d_delta_pct"] is not None
            and s["hold_rate_7d_delta_pct"] < s["ctr_7d_delta_pct"], failures)
 
-    # ── Confidence: flat, mid-tier, monitor. ──
+    # ── Confidence: uniform rise with no ceiling -> amplification. ──
     c = theme_signals["confidence"]
-    print("\nCONFIDENCE - expect flat/stable -> optimization (monitor):")
-    _check("trend_direction == stable", c["trend_direction"] == "stable", failures)
-    _check("trend_strength == weak", c["trend_strength"] == "weak", failures)
-    _check("efficiency_ceiling is False", c["efficiency_ceiling"] is False, failures)
-    _check("hypothesis_type == optimization", c["hypothesis_type"] == "optimization", failures)
+    print("\nCONFIDENCE - expect uniform rise, no ceiling -> amplification:")
+    _check("trend_direction == rising", c["trend_direction"] == "rising", failures)
+    _check("cpi_7d_delta_pct < -MODERATE_PCT (CPI improving materially)",
+           c["cpi_7d_delta_pct"] is not None and c["cpi_7d_delta_pct"] < -MODERATE_PCT, failures)
     _check("uniformity == uniform", c["uniformity"] == "uniform", failures)
+    _check("efficiency_ceiling is False (no spend ramp -> no ceiling)",
+           c["efficiency_ceiling"] is False, failures)
+    _check("hypothesis_type == amplification", c["hypothesis_type"] == "amplification", failures)
 
     # ── Connection: volatile, isolated reels-video winners to replicate. ──
     n = theme_signals["connection"]
