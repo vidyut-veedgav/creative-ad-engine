@@ -40,6 +40,31 @@ from src.signal import build_theme_signals  # noqa: E402
 ADS_PATH = os.path.join(_REPO_ROOT, "data", "ads.csv")
 ENG_PATH = os.path.join(_REPO_ROOT, "data", "engagement.csv")
 
+
+# ── API key bootstrap ─────────────────────────────────────────────────────
+# Streamlit does not read .env files, so the agent's key would otherwise have
+# to be exported in the shell before every `streamlit run`. Load the repo-root
+# .env into os.environ once at import time so the chat works out of the box.
+# Real environment variables win — we only fill in keys that aren't already set.
+def _load_dotenv(path: str = os.path.join(_REPO_ROOT, ".env")) -> None:
+    try:
+        with open(path, encoding="utf-8") as fh:
+            lines = fh.readlines()
+    except OSError:
+        return  # no .env present; rely on the ambient environment
+    for raw in lines:
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+
+_load_dotenv()
+
 # Canonical theme order (left→right on the dashboard).
 THEME_ORDER = ["wonder", "safety", "confidence", "connection"]
 
