@@ -1,4 +1,4 @@
-"""Layer 5 — Streamlit UI for the Giant Creative Ad Engine.
+"""Layer 5: Streamlit UI for the Giant Creative Ad Engine.
 
 Ties the four upstream layers together into a single demo-ready page:
 
@@ -11,7 +11,7 @@ Ties the four upstream layers together into a single demo-ready page:
 
 Design contract preserved here: **the UI never computes a metric.** Layers 1–3
 run exactly once (cached), the agent's startup narrative runs exactly once
-(cached), and every widget below only *reads* those precomputed artifacts — so
+(cached), and every widget below only *reads* those precomputed artifacts, so
 every number on screen is traceable to a verified pipeline output.
 
 Run with:  streamlit run app/app.py
@@ -45,7 +45,7 @@ ENG_PATH = os.path.join(_REPO_ROOT, "data", "engagement.csv")
 # Streamlit does not read .env files, so the agent's key would otherwise have
 # to be exported in the shell before every `streamlit run`. Load the repo-root
 # .env into os.environ once at import time so the chat works out of the box.
-# Real environment variables win — we only fill in keys that aren't already set.
+# Real environment variables win; we only fill in keys that aren't already set.
 def _load_dotenv(path: str = os.path.join(_REPO_ROOT, ".env")) -> None:
     try:
         with open(path, encoding="utf-8") as fh:
@@ -79,7 +79,14 @@ HYPOTHESIS_GLOSS = {
     "retirement": "wind down · reallocate budget",
 }
 
-EXAMPLE_QUESTION = "Which themes are declining and what should we test next?"
+EXAMPLE_QUESTIONS = [
+    "Which themes are declining and what should we test next?",
+    "Why is Safety losing efficiency, and should we retire it?",
+    "What's behind Wonder's efficiency ceiling?",
+    "Which Connection ads are outliers worth replicating?",
+    "How is Confidence trending, and can we scale it?",
+    "What are the highest-ICE recommendations right now?",
+]
 
 
 # ── Cached pipeline + agent ───────────────────────────────────────────────
@@ -115,8 +122,8 @@ def load_agent(_pipeline):
 # ── Small render helpers ──────────────────────────────────────────────────
 
 def _fmt_pct(value: float | None, places: int = 1) -> str:
-    """Signed percentage, e.g. ``-2.5%``; em-dash for missing."""
-    return "—" if value is None else f"{value:+.{places}f}%"
+    """Signed percentage, e.g. ``-2.5%``; dash for missing."""
+    return "-" if value is None else f"{value:+.{places}f}%"
 
 
 def _badge(text: str, color: str) -> str:
@@ -144,13 +151,12 @@ def render_card(theme: str, sig: dict, selected: bool) -> bool:
             f"{HYPOTHESIS_GLOSS.get(htype, '')}</div>",
             unsafe_allow_html=True,
         )
-        # Big headline metric. delta_color="inverse" → negative CPI shows green.
-        st.metric(
-            label="7-day CPI",
-            value=_fmt_pct(sig["cpi_7d_delta_pct"]),
-            delta=sig["trend_direction"],
-            delta_color="inverse",
-        )
+        # Big headline metric (the 7-day CPI delta). The trend word is rendered as
+        # our own coloured badge below — st.metric's delta_color only tints numeric
+        # deltas, so a string like "rising"/"declining"/"stable" would all paint the
+        # same colour. TREND_COLOR gives three distinct ones (green/red/grey).
+        st.metric(label="7-day CPI", value=_fmt_pct(sig["cpi_7d_delta_pct"]))
+        st.markdown(_badge(sig["trend_direction"], color), unsafe_allow_html=True)
         st.caption(
             f"**{sig['trend_strength']}** · {sig['uniformity']} · "
             f"{sig['ads_rising']}↑ / {sig['ads_declining']}↓ / {sig['ads_stable']}→"
@@ -169,27 +175,27 @@ def render_drilldown(theme: str, pipeline) -> None:
     color = TREND_COLOR.get(sig["trend_direction"], "#6e7781")
 
     st.markdown(
-        f"### {theme.title()} — {_badge(sig['hypothesis_type'], color)}",
+        f"### {theme.title()} &nbsp; {_badge(sig['hypothesis_type'], color)}",
         unsafe_allow_html=True,
     )
     st.info(diag["pattern_summary"], icon="🧭")
 
     # Dominant vs weak format/placement.
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Dominant format", diag.get("dominant_format") or "—")
-    c2.metric("Dominant placement", diag.get("dominant_placement") or "—")
-    c3.metric("Weak format", diag.get("weak_format") or "—")
-    c4.metric("Weak placement", diag.get("weak_placement") or "—")
+    c1.metric("Dominant format", diag.get("dominant_format") or "-")
+    c2.metric("Dominant placement", diag.get("dominant_placement") or "-")
+    c3.metric("Weak format", diag.get("weak_format") or "-")
+    c4.metric("Weak placement", diag.get("weak_placement") or "-")
 
     # Per-ad trend charts over the full 90 days (one line per ad).
     theme_eng = eng_df[eng_df["theme"] == theme]
     st.markdown("#### Per-ad trends (90 days)")
     cc1, cc2 = st.columns(2)
     with cc1:
-        st.caption("CPI by ad — lower is better")
+        st.caption("CPI by ad (lower is better)")
         st.line_chart(theme_eng.pivot_table(index="date", columns="ad_id", values="CPI"))
     with cc2:
-        st.caption("CTR by ad — higher is better")
+        st.caption("CTR by ad (higher is better)")
         st.line_chart(theme_eng.pivot_table(index="date", columns="ad_id", values="CTR"))
 
     # Ad-level signal table, annotated with each ad's diagnosis role.
@@ -207,7 +213,7 @@ def render_drilldown(theme: str, pipeline) -> None:
         "ctr_7d_delta_pct", "last7d_mean_cpi", "recent_spend", "direction",
     ]
     table = ad_signals_df[ad_signals_df["theme"] == theme][cols].copy()
-    table.insert(1, "role", table["ad_id"].map(role_by_ad).fillna("—"))
+    table.insert(1, "role", table["ad_id"].map(role_by_ad).fillna("-"))
     table = table.sort_values("cpi_7d_delta_pct")
     st.dataframe(
         table,
@@ -233,27 +239,33 @@ def render_drilldown(theme: str, pipeline) -> None:
         for it in theme_items:
             with st.expander(
                 f"#{it['rank']} · {it['hypothesis_type'].title()} "
-                f"({it['level']}) — ICE {it['ice_score']}/10",
+                f"({it['level']}) · ICE {it['ice_score']}/10",
                 expanded=False,
             ):
                 st.markdown(f"**Recommendation.** {it['recommendation']}")
-                st.markdown(f"**Evidence.** {it['evidence']}")
+                points = it.get("evidence_points")
+                if points:
+                    st.markdown("**Evidence**")
+                    for p in points:
+                        st.markdown(f"- {p}")
+                else:
+                    st.markdown(f"**Evidence.** {it['evidence']}")
                 st.caption(
                     f"Impact: {it['ice_impact']} · Confidence: {it['ice_confidence']} "
                     f"· Ease: {it['ice_ease']}"
                 )
                 if it.get("open_questions"):
-                    st.markdown("**Open questions:**")
+                    st.markdown("**Open questions (to answer with a test):**")
                     for q in it["open_questions"]:
                         st.markdown(f"- {q}")
 
 
 def render_chat(agent, agent_error: str | None) -> None:
     """Global conversational interface over all four themes."""
-    st.markdown("## 💬 Ask the analyst")
+    st.markdown("## Ask the analyst")
     st.caption(
-        "The agent reads the precomputed signals, diagnosis, and backlog through "
-        "typed tools — every answer is traceable to a metric."
+        "The agent answers only from the precomputed signals, diagnosis, and "
+        "backlog."
     )
 
     if agent is None:
@@ -276,7 +288,10 @@ def render_chat(agent, agent_error: str | None) -> None:
                 st.caption(f"Sourced via: {', '.join(msg['tools'])}")
 
     if not st.session_state.messages:
-        st.caption(f'Try: *"{EXAMPLE_QUESTION}"*')
+        st.markdown(
+            "**Try asking:**\n"
+            + "\n".join(f'- *"{q}"*' for q in EXAMPLE_QUESTIONS)
+        )
 
     prompt = st.chat_input("Ask about themes, ads, or what to test next…")
     if not prompt:
@@ -302,10 +317,10 @@ def render_chat(agent, agent_error: str | None) -> None:
 
 def main() -> None:
     st.set_page_config(page_title="Giant Creative Ad Engine", layout="wide", page_icon="📊")
-    st.title("📊 Giant Creative Ad Engine")
+    st.title("Giant Creative Ad Engine")
     st.caption(
-        "Which creative themes are rising or declining — and what to test next. "
-        "Click a theme for ad-level analysis; ask the analyst anything below."
+        "Which creative themes are rising or declining, and what to test next. "
+        "Click a theme for ad-level analysis."
     )
 
     pipeline = load_pipeline()

@@ -29,7 +29,8 @@ ENG_PATH = os.path.join(_REPO_ROOT, "data", "engagement.csv")
 
 _ITEM_KEYS = {
     "rank", "hypothesis_type", "level", "theme", "recommendation", "evidence",
-    "ice_impact", "ice_confidence", "ice_ease", "ice_score", "open_questions",
+    "evidence_points", "ice_impact", "ice_confidence", "ice_ease", "ice_score",
+    "open_questions",
 }
 _LABELS = {"high", "medium", "low"}
 _TYPES = {"amplification", "optimization", "replication", "intervention", "retirement"}
@@ -53,6 +54,8 @@ def _print_evidence(backlog: list[dict]) -> None:
         )
         print(f"      rec: {it['recommendation']}")
         print(f"      ev : {it['evidence']}")
+        for p in it["evidence_points"]:
+            print(f"        • {p}")
         print(f"      q  : {it['open_questions']}")
 
 
@@ -67,6 +70,10 @@ def _verify_contract(backlog: list[dict], theme_signals: dict, failures: list[st
     _check("ice_score in 1..10", all(1 <= it["ice_score"] <= 10 for it in backlog), failures)
     _check("open_questions non-empty list",
            all(isinstance(it["open_questions"], list) and it["open_questions"] for it in backlog),
+           failures)
+    _check("evidence_points non-empty list of strings",
+           all(isinstance(it["evidence_points"], list) and it["evidence_points"]
+               and all(isinstance(p, str) for p in it["evidence_points"]) for it in backlog),
            failures)
     _check("level matches diagnosis_level",
            all(it["level"] == theme_signals[it["theme"]]["diagnosis_level"] for it in backlog), failures)
@@ -113,6 +120,12 @@ def _verify_narratives(backlog: list[dict], failures: list[str]) -> None:
            wonder["hypothesis_type"] == "optimization", failures)
     _check("wonder evidence mentions the efficiency ceiling",
            "ceiling" in wonder["evidence"].lower(), failures)
+    _check("wonder recommendation names the video winner ad_001 + a static/feed laggard",
+           "ad_001" in wonder["recommendation"]
+           and ("ad_005" in wonder["recommendation"] or "ad_002" in wonder["recommendation"]),
+           failures)
+    _check("wonder evidence_points name a specific laggard ad",
+           any("ad_005" in p or "ad_002" in p for p in wonder["evidence_points"]), failures)
 
     repl = next(it for it in by_theme["connection"] if it["hypothesis_type"] == "replication")
     interv = next(it for it in by_theme["connection"] if it["hypothesis_type"] == "intervention")

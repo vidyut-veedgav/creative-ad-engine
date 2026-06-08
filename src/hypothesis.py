@@ -90,9 +90,36 @@ def _money(value: float | None) -> str:
     return "n/a" if value is None else f"${value:,.0f}"
 
 
+def _cpi(value: float | None) -> str:
+    """A CPI level to the cent (spend is whole-dollar; CPI is not)."""
+    return "n/a" if value is None else f"${value:.2f}"
+
+
 def _ids(entries: list[dict]) -> list[str]:
     """ad_ids out of a list of diagnosis ad-entries (leading/lagging)."""
     return [e["ad_id"] for e in entries]
+
+
+def _ad_phrase(entry: dict) -> str:
+    """Name one ad with its format/placement and current CPI level.
+
+    e.g. ``ad_005 (static/feed) at $2.71 CPI``. CPI level and hook come from the
+    diagnosis ad-entry verbatim — nothing is recomputed here.
+    """
+    cpi = entry.get("last7d_mean_cpi")
+    cpi_str = f" at {_cpi(cpi)} CPI" if cpi is not None else ""
+    return f"{entry['ad_id']} ({entry['format']}/{entry['placement']}){cpi_str}"
+
+
+def _ad_list(entries: list[dict]) -> str:
+    """Comma-joined ``_ad_phrase`` for several ads (empty → generic fallback)."""
+    return ", ".join(_ad_phrase(e) for e in entries) or "the relevant ads"
+
+
+def _hook(entry: dict | None) -> str:
+    """The ad's creative hook in quotes (for benchmarking copy), or a fallback."""
+    text = entry.get("hook_text") if entry else None
+    return f'"{text}"' if text else "its current hook"
 
 
 def _drivers(diag: dict) -> str:
@@ -188,10 +215,16 @@ def _recommendation(htype: str, f: dict) -> str:
             f"the theme is rising uniformly with headroom and no efficiency ceiling yet."
         )
     if htype == "optimization" and f["efficiency_ceiling"]:
+        winner = f["winners"][0] if f["winners"] else None
+        bench = (
+            f" against the {drivers} winner {winner['ad_id']} "
+            f"({_cpi(winner.get('last7d_mean_cpi'))} CPI, hook {_hook(winner)})"
+            if winner else ""
+        )
         return (
-            f"Refresh {cap}'s creative with net-new hooks/angles rather than adding budget: "
-            f"it has hit its efficiency ceiling, so test new concepts against the "
-            f"{drivers} winner instead of scaling the existing ones."
+            f"Refresh {cap}'s laggards — {_ad_list(f['laggards'])} — with net-new hooks/angles"
+            f"{bench}, and hold spend flat: it has hit its efficiency ceiling, so added budget "
+            f"no longer lowers CPI."
         )
     if htype == "optimization":
         cut = f" Cut or rework {f['weak_format']} first." if f["weak_format"] else ""
@@ -203,19 +236,20 @@ def _recommendation(htype: str, f: dict) -> str:
         return (
             f"Wind down {cap} and reallocate its budget: the whole theme is declining and even "
             f"its cheapest format ({f['dominant_format'] or 'video'}) is deteriorating fastest "
-            f"(mid-video drop-off), so optimization won't rescue it."
+            f"(mid-video drop-off), so optimization won't rescue it. Worst performers: "
+            f"{_ad_list(f['laggards'])}."
         )
     if htype == "replication":
-        ids = ", ".join(f["winner_ids"]) or "the standout ads"
         return (
-            f"Replicate the {drivers} formula from {ids} across the rest of {cap} - these isolated "
-            f"winners run far below the theme-median CPI while the cluster lags behind them."
+            f"Replicate the {drivers} formula from {_ad_list(f['winners'])} across the rest of "
+            f"{cap} — these isolated winners run far below the theme-median CPI while the cluster "
+            f"lags behind them."
         )
     if htype == "intervention":
-        ids = ", ".join(f["lagging_ids"]) or "the laggards"
         return (
-            f"Fix the execution on {cap}'s laggards ({ids}): they run well above the theme CPI on "
-            f"{f['weak_where']} - swap their format/placement rather than touching the theme strategy."
+            f"Fix the execution on {cap}'s laggards — {_ad_list(f['laggards'])}: they run well "
+            f"above the theme CPI on {f['weak_where']} — swap their format/placement rather than "
+            f"touching the theme strategy."
         )
     return f"Review {cap}."  # unreachable; all five types covered above
 
@@ -239,6 +273,90 @@ def _evidence(htype: str, f: dict) -> str:
     else:  # optimization (ceiling or monitor)
         tail = f" Driver: {f['drivers']}."
     return head + tail
+
+
+def _evidence_points(htype: str, f: dict) -> list[str]:
+    """The same grounding as the ``evidence`` string, split into discrete,
+    ad-specific bullet lines for the UI.
+
+    Every line is a *settled* number from Layers 1–2 (theme CPI delta, per-ad CPI
+    level, the ad's hook copy, last-week spend). What the pipeline genuinely can't
+    answer — e.g. *which* creative element is saturating, or whether a net-new
+    concept resets the ceiling — stays in ``open_questions`` rather than being
+    fabricated here.
+    """
+    counts = (
+        f"Theme CPI {_pct(f['cpi_delta'])} wk/wk; "
+        f"{f['ads_rising']}↑ / {f['ads_declining']}↓ / {f['ads_stable']}→ ads."
+    )
+    spend = f"Last-week spend {_money(f['theme_spend'])}."
+    winner = f["winners"][0] if f["winners"] else None
+    pts: list[str] = []
+
+    if htype == "optimization" and f["efficiency_ceiling"]:
+        pts.append(
+            f"Efficiency ceiling: CPI is flat ({_pct(f['cpi_delta'])} wk/wk) despite a rising "
+            f"30-day spend ramp — extra budget no longer buys lower CPI."
+        )
+        if winner:
+            pts.append(f"Winner to beat: {_ad_phrase(winner)} — hook {_hook(winner)}.")
+        if f["laggards"]:
+            pts.append(f"Dragging the theme mean: {_ad_list(f['laggards'])}.")
+        if f["weak_format"]:
+            pts.append(f"Weakest combo: {f['weak_where']}.")
+        pts.append(spend)
+        return pts
+
+    if htype == "optimization":  # flat / monitor
+        pts.append(f"Flat with no theme-level trend ({_pct(f['cpi_delta'])} wk/wk).")
+        if winner:
+            pts.append(f"Cheapest right now: {_ad_phrase(winner)}.")
+        if f["laggards"]:
+            pts.append(f"Most expensive: {_ad_list(f['laggards'])}.")
+        pts.append(spend)
+        return pts
+
+    if htype == "retirement":
+        pts.append(counts)
+        pts.append(
+            "Even the cheapest format (video) is deteriorating fastest → mid-video drop-off."
+        )
+        if f["laggards"]:
+            pts.append(f"Worst performers: {_ad_list(f['laggards'])}.")
+        pts.append(f"{spend} Reallocate it to a healthier theme.")
+        return pts
+
+    if htype == "replication":
+        if f["winners"]:
+            pts.append(f"Isolated winners far below theme median: {_ad_list(f['winners'])}.")
+        if winner:
+            pts.append(f"Winning formula: {f['drivers']}; e.g. {winner['ad_id']} hook {_hook(winner)}.")
+        if f["laggards"]:
+            pts.append(f"The rest of the cluster lags: {_ad_list(f['laggards'])}.")
+        pts.append(spend)
+        return pts
+
+    if htype == "intervention":
+        if f["laggards"]:
+            pts.append(f"Laggards running well above theme CPI: {_ad_list(f['laggards'])}.")
+        pts.append(f"They sit on {f['weak_where']} — the theme's weak combo.")
+        if winner:
+            pts.append(
+                f"Benchmark against the theme winner {winner['ad_id']} "
+                f"({_cpi(winner.get('last7d_mean_cpi'))} CPI, hook {_hook(winner)})."
+            )
+        pts.append(spend)
+        return pts
+
+    if htype == "amplification":
+        pts.append(f"Rising uniformly with no ceiling — {counts}")
+        if f["winners"]:
+            pts.append(f"Driver: {f['drivers']}; leaders {_ad_list(f['winners'])}.")
+        pts.append("Headroom to scale spend and widen placements.")
+        pts.append(spend)
+        return pts
+
+    return [counts, spend]
 
 
 def _open_questions(htype: str, f: dict) -> list[str]:
@@ -294,6 +412,8 @@ def _facts(theme: str, sig: dict, diag: dict, theme_spend: float | None) -> dict
         "pattern_summary": diag["pattern_summary"],
         "winner_ids": _ids(diag["leading_ads"]),   # cheapest in-theme = the winners
         "lagging_ids": _ids(diag["lagging_ads"]),   # most expensive = intervention targets
+        "winners": diag["leading_ads"],             # full entries: CPI level + hook copy
+        "laggards": diag["lagging_ads"],
         "theme_spend": theme_spend,
     }
 
@@ -315,6 +435,7 @@ def _build_item(htype: str, sig: dict, facts: dict, spend_pts: int) -> dict:
         "theme": facts["theme"],
         "recommendation": _recommendation(htype, facts),
         "evidence": _evidence(htype, facts),
+        "evidence_points": _evidence_points(htype, facts),
         "ice_impact": _PTS_TO_LABEL[impact],
         "ice_confidence": _PTS_TO_LABEL[confidence],
         "ice_ease": _PTS_TO_LABEL[ease],

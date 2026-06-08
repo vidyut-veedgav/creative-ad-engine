@@ -82,6 +82,10 @@ def _ad_entry(rec: dict, features: list[str] | None = None) -> dict:
         "placement": rec["placement"],
         "cpi_7d_delta_pct": _round(rec["cpi_7d_delta_pct"]),
         "ctr_7d_delta_pct": _round(rec["ctr_7d_delta_pct"]),
+        # CPI *level* (noise-robust) and the creative hook, so downstream layers
+        # can name a specific ad and the copy it's running without re-deriving.
+        "last7d_mean_cpi": _round(rec.get("last7d_mean_cpi")),
+        "hook_text": rec.get("hook_text"),
     }
     if features is not None:
         entry["distinguishing_features"] = features
@@ -323,11 +327,15 @@ def build_theme_diagnosis(
 ) -> dict:
     """Build the ``theme_diagnosis`` dict for all themes.
 
-    ``ads_df`` is part of the spec contract but functionally unused here: Layer 1
-    already merged ``format``/``placement``/``platform`` onto ``ad_signals_df``,
-    and the remaining ``ads.csv`` columns are collinear with format/placement or
-    are high-cardinality text. It is accepted for contract stability and future use.
+    ``ads_df`` supplies each ad's ``hook_text`` (the one ``ads.csv`` column the
+    downstream hypothesis layer needs to name the specific creative behind a
+    laggard/winner). It is merged onto a local copy of ``ad_signals_df`` so the
+    ad-entry builder can carry it through verbatim; no Layer 1 metric is touched.
     """
+    hook_by_ad = ads_df.set_index("ad_id")["hook_text"].to_dict()
+    ad_signals_df = ad_signals_df.copy()
+    ad_signals_df["hook_text"] = ad_signals_df["ad_id"].map(hook_by_ad)
+
     theme_diagnosis: dict = {}
     for theme in sorted(theme_signals):
         theme_rows = ad_signals_df[ad_signals_df["theme"] == theme]
